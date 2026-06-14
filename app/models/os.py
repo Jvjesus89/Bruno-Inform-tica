@@ -17,7 +17,6 @@ class OS(Base):
     data_abertura: Mapped[DateTime] = mapped_column(DateTime, default=func.now())
     data_conclusao: Mapped[DateTime] = mapped_column(DateTime, nullable=True)
 
-    # Relacionamento reverso            
     cliente: Mapped["Clientes"] = relationship(back_populates="ordens_servico")
 
     itens: Mapped[List["OSItens"]] = relationship(

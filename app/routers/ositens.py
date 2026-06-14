@@ -10,7 +10,6 @@ router = APIRouter(prefix="/ositens", tags=["OSItens"])
 
 @router.get("/", response_model=List[OSItensResponse])
 def listar_itens(
-    # Filtros opcionais via Query Params
     skip: int = Query(0, ge=0, description="Número de registros a pular (offset)"),
     limit: int = Query(10, ge=1, le=100, description="Quantidade máxima de registros a retornar (limit)"),
     db: Session = Depends(get_db)

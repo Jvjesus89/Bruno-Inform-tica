@@ -1,10 +1,16 @@
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from typing import List
 import uuid
 
 from app.core.database import get_db
+from app.core.deps import get_current_user
+from app.core.exceptions import (
+    EntityNotFoundException,
+    InvalidStatusException,
+    InvalidStateTransitionException,
+)
 from app.models.os import OS
 from app.models import Clientes, Equipamento, Usuario
 from app.schemas.os import OSCreate, OSResponse
@@ -21,30 +27,22 @@ MAPA_TRANSIÇÕES = {
 }
 
 @router.post("/", response_model=OSResponse, status_code=status.HTTP_201_CREATED)
-def criar_os(os_input: OSCreate, db: Session = Depends(get_db)):
-    # 1. Valida se o cliente existe
+def criar_os(
+    os_input: OSCreate,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_user),  
+):
     query_cliente = select(Clientes).where(Clientes.idcliente == os_input.idcliente)
     if not db.scalars(query_cliente).first():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cliente não encontrado."
-        )
+        raise EntityNotFoundException("Cliente", os_input.idcliente)
 
-    # 2. Valida se o equipamento existe
     query_equip = select(Equipamento).where(Equipamento.idequipamento == os_input.idequipamento)
     if not db.scalars(query_equip).first():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Equipamento não encontrado."
-        )
+        raise EntityNotFoundException("Equipamento", os_input.idequipamento)
 
-    # 3. Valida se o técnico existe
     query_tec = select(Usuario).where(Usuario.id == os_input.idtecnico)
     if not db.scalars(query_tec).first():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Técnico não encontrado."
-        )
+        raise EntityNotFoundException("Técnico", os_input.idtecnico)
 
     nova_os = OS(
         idcliente=os_input.idcliente,
@@ -64,51 +62,35 @@ def buscar_os(id_os: uuid.UUID, db: Session = Depends(get_db)):
     query = select(OS).where(OS.idos == id_os)
     os_registro = db.scalars(query).first()
     if not os_registro:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Ordem de Serviço não encontrada."
-        )
+        raise EntityNotFoundException("Ordem de Serviço", id_os)
     return os_registro
 
 @router.put("/{id_os}/status", status_code=status.HTTP_200_OK)
 def atualizar_status_os(
     id_os: uuid.UUID,
     novo_status: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_user), 
 ):
-    # 1. Valida se o status enviado existe no sistema
     novo_status = novo_status.upper()
     if novo_status not in STATUS_PERMITIDOS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Status inválido. Escolha entre: {', '.join(STATUS_PERMITIDOS)}"
-        )
+        raise InvalidStatusException(novo_status, STATUS_PERMITIDOS)
 
-    # 2. Busca a Ordem de Serviço no banco
     query = select(OS).where(OS.idos == id_os)
     os_registro = db.scalars(query).first()
 
     if not os_registro:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Ordem de Serviço não encontrada."
-        )
+        raise EntityNotFoundException("Ordem de Serviço", id_os)
 
     status_atual = os_registro.status.upper()
 
-    # 3. Se o status já for o mesmo, não faz nada
     if status_atual == novo_status:
         return {"message": "A OS já está com este status.", "status": status_atual}
 
-    # 4. Valida a Regra de Transição (Máquina de Estados)
     transicoes_possiveis = MAPA_TRANSIÇÕES.get(status_atual, [])
     if novo_status not in transicoes_possiveis:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Transição de estado inválida. Uma OS '{status_atual}' não pode ser alterada para '{novo_status}'."
-        )
+        raise InvalidStateTransitionException(status_atual, novo_status)
 
-    # 5. Se passou pelas regras, atualiza o banco de dados
     os_registro.status = novo_status
     db.commit()
     db.refresh(os_registro)
@@ -122,7 +104,6 @@ def atualizar_status_os(
     
 @router.get("/", response_model=List[OSResponse])
 def listar_OS(
-    # Filtros opcionais via Query Params
     skip: int = Query(0, ge=0, description="Número de registros a pular (offset)"),
     limit: int = Query(10, ge=1, le=100, description="Quantidade máxima de registros a retornar (limit)"),
     db: Session = Depends(get_db)
