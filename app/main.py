@@ -8,6 +8,7 @@ from app.routers.produtos import router as produto_router
 from app.routers.usuario import router as usuario_router
 from app.routers.equipamento import router as equipamento_router
 from app.routers.auth import router as auth_router
+from app.routers.ositens import router as ositens_router
 
 from app.core.exceptions import (
     EntityNotFoundException,
@@ -15,6 +16,9 @@ from app.core.exceptions import (
     InvalidStateTransitionException,
     InvalidStatusException,
     AuthenticationException,
+    ParentEntityHasActiveChildrenException,
+    InsufficientStockException,
+    ModifyTerminalEntityException,
 )
 from app.seed import seed_database
 
@@ -88,6 +92,30 @@ async def authentication_handler(request: Request, exc: AuthenticationException)
     )
 
 
+@app.exception_handler(ParentEntityHasActiveChildrenException)
+async def parent_active_children_handler(request: Request, exc: ParentEntityHasActiveChildrenException):
+    return JSONResponse(
+        status_code=400,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(InsufficientStockException)
+async def insufficient_stock_handler(request: Request, exc: InsufficientStockException):
+    return JSONResponse(
+        status_code=400,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(ModifyTerminalEntityException)
+async def modify_terminal_entity_handler(request: Request, exc: ModifyTerminalEntityException):
+    return JSONResponse(
+        status_code=400,
+        content={"detail": str(exc)},
+    )
+
+
 # ──────────────────────────────────────────────────────────────
 # Registro de Routers
 # ──────────────────────────────────────────────────────────────
@@ -98,6 +126,7 @@ app.include_router(produto_router)
 app.include_router(os_router)
 app.include_router(usuario_router)
 app.include_router(equipamento_router)
+app.include_router(ositens_router)
 
 
 @app.get("/")

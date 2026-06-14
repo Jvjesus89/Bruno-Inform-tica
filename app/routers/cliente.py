@@ -2,12 +2,14 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from typing import List
+import uuid
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
-from app.core.exceptions import DuplicateEntityException
+from app.core.exceptions import DuplicateEntityException, EntityNotFoundException, ParentEntityHasActiveChildrenException
 from app.models.clientes import Clientes  
 from app.models.usuario import Usuario
+from app.models.os import OS
 from app.schemas.cliente import ClienteCreate, ClientesResponse  
 
 
@@ -56,3 +58,27 @@ def listar_clientes(
     resultado = db.scalars(query).all()
 
     return resultado
+
+
+@router.delete("/{idcliente}", status_code=status.HTTP_204_NO_CONTENT)
+def deletar_cliente(
+    idcliente: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_user),  # 🔒 Rota protegida
+):
+    query = select(Clientes).where(Clientes.idcliente == idcliente)
+    cliente = db.scalars(query).first()
+    if not cliente:
+        raise EntityNotFoundException("Cliente", idcliente)
+
+    # Verifica se possui OS ativa (ABERTA ou EM_ANDAMENTO)
+    query_active_os = select(OS).where(
+        OS.idcliente == idcliente,
+        OS.status.in_(["ABERTA", "EM_ANDAMENTO"])
+    )
+    if db.scalars(query_active_os).first():
+        raise ParentEntityHasActiveChildrenException("Cliente", idcliente)
+
+    db.delete(cliente)
+    db.commit()
+    return None

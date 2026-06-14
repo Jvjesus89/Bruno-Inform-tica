@@ -356,3 +356,282 @@ def test_login_senha_incorreta():
     resp = client.post("/auth/token", data={"username": email, "password": "senha-errada"})
     assert resp.status_code == 401
     assert "incorretos" in resp.json()["detail"]
+
+
+# 14. Tentar deletar cliente ou equipamento com Ordem de Serviço ativa (Erro 400)
+def test_deletar_cliente_ou_equipamento_com_os_ativa():
+    headers = _create_user_and_get_token()
+    unique_suffix = uuid.uuid4().hex[:6]
+    
+    # Cria o cliente
+    cliente_payload = {
+        "nome": f"Cliente Deletar {unique_suffix}",
+        "cpf_cnpj": generate_random_cpf(),
+        "email": f"cli.del.{unique_suffix}@example.com",
+        "telefone": "11999999999"
+    }
+    cli_resp = client.post("/clientes/", json=cliente_payload, headers=headers)
+    idcliente = cli_resp.json()["idcliente"]
+
+    # Cria o equipamento
+    equip_payload = {
+        "tipo": "Notebook",
+        "marca": "HP",
+        "modelo": "Elitebook",
+        "numero_serie": f"NS-HP-{unique_suffix}",
+        "idcliente": idcliente
+    }
+    equip_resp = client.post("/equipamentos/", json=equip_payload, headers=headers)
+    idequipamento = equip_resp.json()["idequipamento"]
+
+    # Cria o técnico
+    tec_payload = {
+        "nome": f"Tec Del {unique_suffix}",
+        "email": f"tec.del.{unique_suffix}@example.com",
+        "senha": "senha-segura",
+        "tipo": "TECNICO"
+    }
+    idtecnico = client.post("/usuarios/", json=tec_payload).json()["id"]
+
+    # Cria OS ativa (ABERTA)
+    os_payload = {
+        "idcliente": idcliente,
+        "idequipamento": idequipamento,
+        "idtecnico": idtecnico,
+        "status": "ABERTA",
+        "descricao_defeito": f"Tela piscando {unique_suffix}",
+        "valor_total": "0.00"
+    }
+    client.post("/ordens-servico/", json=os_payload, headers=headers)
+
+    # Tenta deletar cliente (deve falhar)
+    del_cli_resp = client.delete(f"/clientes/{idcliente}", headers=headers)
+    assert del_cli_resp.status_code == 400
+    assert "possui Ordens de Serviço ativas" in del_cli_resp.json()["detail"]
+
+    # Tenta deletar equipamento (deve falhar)
+    del_equip_resp = client.delete(f"/equipamentos/{idequipamento}", headers=headers)
+    assert del_equip_resp.status_code == 400
+    assert "possui Ordens de Serviço ativas" in del_equip_resp.json()["detail"]
+
+
+# 15. Deletar cliente ou equipamento sem Ordem de Serviço ativa (Sucesso 204)
+def test_deletar_cliente_ou_equipamento_sem_os_ativa():
+    headers = _create_user_and_get_token()
+    unique_suffix = uuid.uuid4().hex[:6]
+    
+    # Cria o cliente
+    cliente_payload = {
+        "nome": f"Cliente Sucesso {unique_suffix}",
+        "cpf_cnpj": generate_random_cpf(),
+        "email": f"cli.suc.{unique_suffix}@example.com",
+        "telefone": "11999999999"
+    }
+    idcliente = client.post("/clientes/", json=cliente_payload, headers=headers).json()["idcliente"]
+
+    # Cria o equipamento
+    equip_payload = {
+        "tipo": "Tablet",
+        "marca": "Apple",
+        "modelo": "iPad Air",
+        "numero_serie": f"NS-IPAD-{unique_suffix}",
+        "idcliente": idcliente
+    }
+    idequipamento = client.post("/equipamentos/", json=equip_payload, headers=headers).json()["idequipamento"]
+
+    # Deleta equipamento primeiro
+    del_equip_resp = client.delete(f"/equipamentos/{idequipamento}", headers=headers)
+    assert del_equip_resp.status_code == 204
+
+    # Deleta cliente
+    del_cli_resp = client.delete(f"/clientes/{idcliente}", headers=headers)
+    assert del_cli_resp.status_code == 204
+
+
+# 16. Adicionar item à OS com estoque insuficiente (Erro 400)
+def test_adicionar_item_os_estoque_insuficiente():
+    headers = _create_user_and_get_token()
+    unique_suffix = uuid.uuid4().hex[:6]
+
+    # Cria cliente, equipamento, técnico e OS
+    idcliente = client.post("/clientes/", json={
+        "nome": f"Cli Est {unique_suffix}", "cpf_cnpj": generate_random_cpf(),
+        "email": f"cli.est.{unique_suffix}@example.com", "telefone": "11999999999"
+    }, headers=headers).json()["idcliente"]
+
+    idequipamento = client.post("/equipamentos/", json={
+        "tipo": "Notebook", "marca": "Dell", "modelo": "XPS",
+        "numero_serie": f"NS-XPS-{unique_suffix}", "idcliente": idcliente
+    }, headers=headers).json()["idequipamento"]
+
+    idtecnico = client.post("/usuarios/", json={
+        "nome": f"Tec Est {unique_suffix}", "email": f"tec.est.{unique_suffix}@example.com",
+        "senha": "senha", "tipo": "TECNICO"
+    }).json()["id"]
+
+    idos = client.post("/ordens-servico/", json={
+        "idcliente": idcliente, "idequipamento": idequipamento, "idtecnico": idtecnico,
+        "status": "ABERTA", "descricao_defeito": f"Defeito {unique_suffix}", "valor_total": "0.00"
+    }, headers=headers).json()["idos"]
+
+    # Cria produto com estoque de 3 unidades
+    prod_resp = client.post("/produtos/", json={
+        "nome": f"Memória RAM DDR4 {unique_suffix}",
+        "descricao": "Pente de memória 8GB",
+        "preco_venda": "250.00",
+        "quantidade_estoque": 3
+    }, headers=headers)
+    idproduto = prod_resp.json()["idproduto"]
+
+    # Tenta adicionar item à OS com quantidade de 5 unidades (maior que o estoque de 3)
+    item_payload = {
+        "idos": idos,
+        "idproduto": idproduto,
+        "quantidade": 5,
+        "preco_unitario_aplicado": "250.00"
+    }
+    item_resp = client.post("/ositens/", json=item_payload, headers=headers)
+    assert item_resp.status_code == 400
+    assert "Estoque insuficiente" in item_resp.json()["detail"]
+
+
+# 17. Adicionar item à OS com sucesso e verificar a baixa de estoque (Sucesso 201)
+def test_adicionar_item_os_sucesso_e_baixa_estoque():
+    headers = _create_user_and_get_token()
+    unique_suffix = uuid.uuid4().hex[:6]
+
+    # Cria cliente, equipamento, técnico e OS
+    idcliente = client.post("/clientes/", json={
+        "nome": f"Cli Ok {unique_suffix}", "cpf_cnpj": generate_random_cpf(),
+        "email": f"cli.ok.{unique_suffix}@example.com", "telefone": "11999999999"
+    }, headers=headers).json()["idcliente"]
+
+    idequipamento = client.post("/equipamentos/", json={
+        "tipo": "Notebook", "marca": "Dell", "modelo": "Latitude",
+        "numero_serie": f"NS-LAT-{unique_suffix}", "idcliente": idcliente
+    }, headers=headers).json()["idequipamento"]
+
+    idtecnico = client.post("/usuarios/", json={
+        "nome": f"Tec Ok {unique_suffix}", "email": f"tec.ok.{unique_suffix}@example.com",
+        "senha": "senha", "tipo": "TECNICO"
+    }).json()["id"]
+
+    os_data = client.post("/ordens-servico/", json={
+        "idcliente": idcliente, "idequipamento": idequipamento, "idtecnico": idtecnico,
+        "status": "ABERTA", "descricao_defeito": f"Defeito OK {unique_suffix}", "valor_total": "0.00"
+    }, headers=headers).json()
+    idos = os_data["idos"]
+
+    # Cria produto com estoque de 10 unidades
+    idproduto = client.post("/produtos/", json={
+        "nome": f"SSD NVMe 1TB {unique_suffix}",
+        "descricao": "SSD Samsung Evo",
+        "preco_venda": "450.00",
+        "quantidade_estoque": 10
+    }, headers=headers).json()["idproduto"]
+
+    # Adiciona item com quantidade 2
+    item_payload = {
+        "idos": idos,
+        "idproduto": idproduto,
+        "quantidade": 2,
+        "preco_unitario_aplicado": "450.00"
+    }
+    item_resp = client.post("/ositens/", json=item_payload, headers=headers)
+    assert item_resp.status_code == 201
+
+    # Verifica se a Ordem de Serviço teve o valor total atualizado (2 * 450 = 900)
+    os_get = client.get(f"/ordens-servico/{idos}", headers=headers).json()
+    assert float(os_get["valor_total"]) == 900.00
+
+    # Verifica se a quantidade no estoque do produto diminuiu para 8 (10 - 2)
+    prod_list = client.get(f"/produtos/?nome=SSD%20NVMe%201TB%20{unique_suffix}", headers=headers).json()
+    assert len(prod_list) == 1
+    assert prod_list[0]["quantidade_estoque"] == 8
+
+
+# 18. Tentar adicionar item a uma OS em estado terminal (Erro 400)
+def test_adicionar_item_os_estado_terminal():
+    headers = _create_user_and_get_token()
+    unique_suffix = uuid.uuid4().hex[:6]
+
+    # Cria cliente, equipamento, técnico e OS
+    idcliente = client.post("/clientes/", json={
+        "nome": f"Cli Term {unique_suffix}", "cpf_cnpj": generate_random_cpf(),
+        "email": f"cli.term.{unique_suffix}@example.com", "telefone": "11999999999"
+    }, headers=headers).json()["idcliente"]
+
+    idequipamento = client.post("/equipamentos/", json={
+        "tipo": "Notebook", "marca": "Dell", "modelo": "Vostro",
+        "numero_serie": f"NS-VOS-{unique_suffix}", "idcliente": idcliente
+    }, headers=headers).json()["idequipamento"]
+
+    idtecnico = client.post("/usuarios/", json={
+        "nome": f"Tec Term {unique_suffix}", "email": f"tec.term.{unique_suffix}@example.com",
+        "senha": "senha", "tipo": "TECNICO"
+    }).json()["id"]
+
+    idos = client.post("/ordens-servico/", json={
+        "idcliente": idcliente, "idequipamento": idequipamento, "idtecnico": idtecnico,
+        "status": "ABERTA", "descricao_defeito": f"Defeito Term {unique_suffix}", "valor_total": "0.00"
+    }, headers=headers).json()["idos"]
+
+    # Cria produto
+    idproduto = client.post("/produtos/", json={
+        "nome": f"Cabo HDMI {unique_suffix}",
+        "descricao": "Cabo HDMI 2m",
+        "preco_venda": "30.00",
+        "quantidade_estoque": 10
+    }, headers=headers).json()["idproduto"]
+
+    # Avança OS para EM_ANDAMENTO
+    client.put(f"/ordens-servico/{idos}/status?novo_status=EM_ANDAMENTO", headers=headers)
+    # Conclui a OS (estado terminal)
+    client.put(f"/ordens-servico/{idos}/status?novo_status=CONCLUIDA", headers=headers)
+
+    # Tenta adicionar item à OS concluída
+    item_payload = {
+        "idos": idos,
+        "idproduto": idproduto,
+        "quantidade": 1,
+        "preco_unitario_aplicado": "30.00"
+    }
+    item_resp = client.post("/ositens/", json=item_payload, headers=headers)
+    assert item_resp.status_code == 400
+    assert "estado terminal" in item_resp.json()["detail"]
+
+
+# 19. Tentar modificar status de OS já em estado terminal (Erro 400)
+def test_modificar_status_os_estado_terminal():
+    headers = _create_user_and_get_token()
+    unique_suffix = uuid.uuid4().hex[:6]
+
+    # Cria cliente, equipamento, técnico e OS
+    idcliente = client.post("/clientes/", json={
+        "nome": f"Cli StTerm {unique_suffix}", "cpf_cnpj": generate_random_cpf(),
+        "email": f"cli.stt.{unique_suffix}@example.com", "telefone": "11999999999"
+    }, headers=headers).json()["idcliente"]
+
+    idequipamento = client.post("/equipamentos/", json={
+        "tipo": "Notebook", "marca": "Dell", "modelo": "Precision",
+        "numero_serie": f"NS-PRE-{unique_suffix}", "idcliente": idcliente
+    }, headers=headers).json()["idequipamento"]
+
+    idtecnico = client.post("/usuarios/", json={
+        "nome": f"Tec StTerm {unique_suffix}", "email": f"tec.stt.{unique_suffix}@example.com",
+        "senha": "senha", "tipo": "TECNICO"
+    }).json()["id"]
+
+    idos = client.post("/ordens-servico/", json={
+        "idcliente": idcliente, "idequipamento": idequipamento, "idtecnico": idtecnico,
+        "status": "ABERTA", "descricao_defeito": f"Defeito StTerm {unique_suffix}", "valor_total": "0.00"
+    }, headers=headers).json()["idos"]
+
+    # Cancela a OS (estado terminal)
+    client.put(f"/ordens-servico/{idos}/status?novo_status=CANCELADA", headers=headers)
+
+    # Tenta reabrir a OS (mudar para ABERTA)
+    put_resp = client.put(f"/ordens-servico/{idos}/status?novo_status=ABERTA", headers=headers)
+    assert put_resp.status_code == 400
+    assert "estado terminal" in put_resp.json()["detail"]
+

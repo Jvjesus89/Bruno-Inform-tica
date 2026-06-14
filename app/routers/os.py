@@ -10,6 +10,7 @@ from app.core.exceptions import (
     EntityNotFoundException,
     InvalidStatusException,
     InvalidStateTransitionException,
+    ModifyTerminalEntityException,
 )
 from app.models.os import OS
 from app.models import Clientes, Equipamento, Usuario
@@ -83,6 +84,9 @@ def atualizar_status_os(
         raise EntityNotFoundException("Ordem de Serviço", id_os)
 
     status_atual = os_registro.status.upper()
+
+    if status_atual in ["CONCLUIDA", "CANCELADA"]:
+        raise ModifyTerminalEntityException("Ordem de Serviço", id_os, status_atual)
 
     if status_atual == novo_status:
         return {"message": "A OS já está com este status.", "status": status_atual}

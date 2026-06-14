@@ -2,12 +2,14 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from typing import List
+import uuid
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
-from app.core.exceptions import DuplicateEntityException
+from app.core.exceptions import DuplicateEntityException, EntityNotFoundException, ParentEntityHasActiveChildrenException
 from app.models.equipamento import Equipamento
 from app.models.usuario import Usuario
+from app.models.os import OS
 from app.schemas.equipamento import EquipamentoCreate, EquipamentoResponse
 
 router = APIRouter(prefix="/equipamentos", tags=["Equipamentos"])
@@ -46,3 +48,27 @@ def listar_equipamentos(
     query = select(Equipamento).offset(skip).limit(limit)
     resultado = db.scalars(query).all()
     return resultado
+
+
+@router.delete("/{idequipamento}", status_code=status.HTTP_204_NO_CONTENT)
+def deletar_equipamento(
+    idequipamento: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_user),  # 🔒 Rota protegida
+):
+    query = select(Equipamento).where(Equipamento.idequipamento == idequipamento)
+    equipamento = db.scalars(query).first()
+    if not equipamento:
+        raise EntityNotFoundException("Equipamento", idequipamento)
+
+    # Verifica se possui OS ativa (ABERTA ou EM_ANDAMENTO)
+    query_active_os = select(OS).where(
+        OS.idequipamento == idequipamento,
+        OS.status.in_(["ABERTA", "EM_ANDAMENTO"])
+    )
+    if db.scalars(query_active_os).first():
+        raise ParentEntityHasActiveChildrenException("Equipamento", idequipamento)
+
+    db.delete(equipamento)
+    db.commit()
+    return None
